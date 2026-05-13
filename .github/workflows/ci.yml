@@ -22,15 +22,17 @@ jobs:
       - name: Установка зависимостей
         run: |
           cd backend
-          pip install -r requirements.txt
+          pip install fastapi uvicorn sqlalchemy psycopg2-binary python-jose[cryptography] passlib[bcrypt] python-multipart pydantic python-dotenv
       
       - name: Создание .env
         run: |
           cd backend
-          echo "DATABASE_URL=sqlite:///./test.db" > .env
-          echo "SECRET_KEY=test-secret-key" >> .env
-          echo "ALGORITHM=HS256" >> .env
-          echo "ACCESS_TOKEN_EXPIRE_MINUTES=30" >> .env
+          cat > .env << 'EOF'
+          DATABASE_URL=sqlite:///./test.db
+          SECRET_KEY=test-secret-key-at-least-32-chars-long
+          ALGORITHM=HS256
+          ACCESS_TOKEN_EXPIRE_MINUTES=30
+          EOF
       
       - name: Проверка импортов
         run: |
@@ -41,10 +43,10 @@ jobs:
           from app.main import app
           from app import models, schemas, auth, database
           from app.routes import auth_router, entries_router
-          print('✅ All imports successful')
+          print('✅ All backend imports successful')
           "
 
-  # СБОРКА FRONTEND
+  # СБОРКА FRONTEND (исправленная)
   build-frontend:
     runs-on: ubuntu-latest
     
@@ -55,12 +57,29 @@ jobs:
         with:
           node-version: '18'
       
-      - name: Установка и сборка
+      - name: Очистка кеша
+        run: npm cache clean --force
+      
+      - name: Подготовка
         run: |
           cd frontend
-          npm ci --legacy-peer-deps || npm install --legacy-peer-deps
+          rm -rf node_modules package-lock.json
+      
+      - name: Установка зависимостей
+        run: |
+          cd frontend
+          npm install --legacy-peer-deps --no-package-lock
+      
+      - name: Фикс ajv
+        run: |
+          cd frontend
+          npm install ajv@8 ajv-keywords@5 --save-dev --legacy-peer-deps --no-package-lock
+      
+      - name: Сборка
+        run: |
+          cd frontend
+          export NODE_OPTIONS="--max-old-space-size=4096"
           CI=false npm run build
-          ls -la build/
       
       - name: Проверка
         run: test -f frontend/build/index.html
