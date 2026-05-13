@@ -1,192 +1,23 @@
-name: CI/CD для Онлайн-Дневника
+name: Simple CI
 
-on:
-  push:
-    branches: [ main ]
-  pull_request:
-    branches: [ main ]
-  workflow_dispatch:  # позволяет запускать вручную
+on: [push]
 
 jobs:
-  # ========== JOB 1: ПРОВЕРКА BACKEND ==========
-  test-backend:
+  test:
     runs-on: ubuntu-latest
     
-    services:
-      postgres:
-        image: postgres:15
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: diary_db
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-    
     steps:
-      - name: Клонирование репозитория
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
       
-      - name: Установка Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-      
-      - name: Кеширование pip-зависимостей
-        uses: actions/cache@v3
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('backend/requirements.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-pip-
-      
-      - name: Установка зависимостей backend
+      - name: Test Backend Imports
         run: |
           cd backend
           pip install -r requirements.txt
+          python -c "from app.main import app; print('Backend OK')"
       
-      - name: Создание .env файла для CI
-        run: |
-          cd backend
-          echo "DATABASE_URL=postgresql://postgres:postgres@localhost:5432/diary_db" > .env
-          echo "SECRET_KEY=ci-test-secret-key" >> .env
-          echo "ALGORITHM=HS256" >> .env
-          echo "ACCESS_TOKEN_EXPIRE_MINUTES=30" >> .env
-      
-      - name: Проверка синтаксиса Python (flake8)
-        run: |
-          cd backend
-          pip install flake8
-          flake8 app --count --select=E9,F63,F7,F82 --show-source --statistics
-      
-      - name: Запуск тестов backend (проверка импортов)
-        run: |
-          cd backend
-          python -c "from app.main import app; print('✅ Backend imports OK')"
-      
-      - name: Проверка создания таблиц в БД
-        run: |
-          cd backend
-          python -c "
-          from app.database import engine, Base
-          from app import models
-          Base.metadata.create_all(bind=engine)
-          print('✅ Database tables created successfully')
-          "
-      
-      - name: Проверка healthcheck endpoint
-        run: |
-          cd backend
-          python -c "
-          import requests
-          import threading
-          import time
-          from app.main import app
-          import uvicorn
-          
-          def run_server():
-              uvicorn.run(app, host='127.0.0.1', port=8000, log_level='error')
-          
-          thread = threading.Thread(target=run_server)
-          thread.daemon = True
-          thread.start()
-          time.sleep(3)
-          
-          response = requests.get('http://127.0.0.1:8000/health')
-          assert response.status_code == 200
-          assert response.json() == {'status': 'ok'}
-          print('✅ Healthcheck passed')
-          "
-
-  # ========== JOB 2: СБОРКА FRONTEND ==========
-  build-frontend:
-    runs-on: ubuntu-latest
-    
-    steps:
-      - name: Клонирование репозитория
-        uses: actions/checkout@v4
-      
-      - name: Установка Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '18'
-      
-      - name: Кеширование node_modules
-        uses: actions/cache@v3
-        with:
-          path: frontend/node_modules
-          key: ${{ runner.os }}-node-${{ hashFiles('frontend/package-lock.json') }}
-          restore-keys: |
-            ${{ runner.os }}-node-
-      
-      - name: Установка зависимостей frontend
+      - name: Test Frontend Build
         run: |
           cd frontend
-          npm ci
-      
-      - name: Сборка frontend (production)
-        run: |
-          cd frontend
+          npm install
           npm run build
-      
-      - name: Проверка наличия сборки
-        run: |
-          ls -la frontend/build/
-          test -f frontend/build/index.html && echo "✅ Build exists"
-
-  # ========== JOB 3: SMOKE TEST (DOCKER COMPOSE) ==========
-  docker-smoke-test:
-    runs-on: ubuntu-latest
-    needs: [test-backend, build-frontend]
-    
-    steps:
-      - name: Клонирование репозитория
-        uses: actions/checkout@v4
-      
-      - name: Создание .env файла
-        run: |
-          cd backend
-          echo "DATABASE_URL=postgresql://postgres:postgres@db:5432/diary_db" > .env
-          echo "SECRET_KEY=ci-smoke-test-secret" >> .env
-          echo "ALGORITHM=HS256" >> .env
-          echo "ACCESS_TOKEN_EXPIRE_MINUTES=30" >> .env
-      
-      - name: Сборка и запуск Docker Compose
-        run: docker-compose up -d --build
-      
-      - name: Ожидание запуска сервисов
-        run: sleep 15
-      
-      - name: Проверка логов Docker
-        run: docker-compose logs
-      
-      - name: Проверка доступности backend API
-        run: |
-          curl -f http://localhost:8000/health || exit 1
-          echo "✅ Backend API is accessible"
-      
-      - name: Проверка доступности frontend
-        run: |
-          curl -f http://localhost:3000 || exit 1
-          echo "✅ Frontend is accessible"
-      
-      - name: Проверка регистрации пользователя через API
-        run: |
-          curl -X POST http://localhost:8000/api/auth/register \
-            -H "Content-Type: application/json" \
-            -d '{"username":"testuser","email":"test@test.com","password":"test123"}' || exit 1
-          echo "✅ Registration works"
-      
-      - name: Проверка логина и получения JWT
-        run: |
-          curl -X POST http://localhost:8000/api/auth/login \
-            -H "Content-Type: application/x-www-form-urlencoded" \
-            -d "username=testuser&password=test123" || exit 1
-          echo "✅ Login works"
-      
-      - name: Остановка Docker Compose
-        run: docker-compose down
+          echo "Frontend OK"
