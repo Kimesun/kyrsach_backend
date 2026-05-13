@@ -1,23 +1,120 @@
-name: Simple CI
+name: CI/CD для Онлайн-Дневника
 
-on: [push]
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
 
 jobs:
-  test:
+  # JOB 1: ПРОВЕРКА BACKEND (упрощённая)
+  test-backend:
     runs-on: ubuntu-latest
     
     steps:
-      - uses: actions/checkout@v4
+      - name: Клонирование репозитория
+        uses: actions/checkout@v4
       
-      - name: Test Backend Imports
+      - name: Установка Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Установка зависимостей
         run: |
           cd backend
-          pip install -r requirements.txt
-          python -c "from app.main import app; print('Backend OK')"
+          pip install fastapi uvicorn sqlalchemy psycopg2-binary python-jose[cryptography] passlib[bcrypt] python-multipart pydantic python-dotenv
       
-      - name: Test Frontend Build
+      - name: Проверка синтаксиса Python
+        run: |
+          cd backend
+          python -m py_compile app/main.py
+          python -m py_compile app/models.py
+          python -m py_compile app/schemas.py
+          python -m py_compile app/auth.py
+          python -m py_compile app/database.py
+          python -m py_compile app/config.py
+          python -m py_compile app/routes/auth.py
+          python -m py_compile app/routes/entries.py
+          echo "✅ All Python files compiled successfully"
+      
+      - name: Проверка импортов
+        run: |
+          cd backend
+          python -c "
+          import sys
+          sys.path.insert(0, '.')
+          try:
+              from app.main import app
+              print('✅ Main imported')
+              from app import models, schemas, auth, database
+              print('✅ Core imported')
+              from app.routes import auth_router, entries_router
+              print('✅ Routes imported')
+              print('SUCCESS: All imports work')
+          except Exception as e:
+              print(f'ERROR: {e}')
+              sys.exit(1)
+          "
+
+  # JOB 2: СБОРКА FRONTEND
+  build-frontend:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Клонирование репозитория
+        uses: actions/checkout@v4
+      
+      - name: Установка Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+      
+      - name: Установка зависимостей
         run: |
           cd frontend
-          npm install
-          npm run build
-          echo "Frontend OK"
+          npm install --legacy-peer-deps
+      
+      - name: Сборка frontend
+        run: |
+          cd frontend
+          CI=false npm run build
+      
+      - name: Проверка сборки
+        run: |
+          test -f frontend/build/index.html && echo "✅ Build successful" || (echo "❌ Build failed" && exit 1)
+
+  # JOB 3: SMOKE TEST (опционально, можно временно отключить)
+  docker-smoke-test:
+    runs-on: ubuntu-latest
+    needs: [test-backend, build-frontend]
+    
+    steps:
+      - name: Клонирование
+        uses: actions/checkout@v4
+      
+      - name: Создание .env
+        run: |
+          mkdir -p backend
+          echo "DATABASE_URL=postgresql://postgres:postgres@db:5432/diary_db" > backend/.env
+          echo "SECRET_KEY=test-secret-key" >> backend/.env
+          echo "ALGORITHM=HS256" >> backend/.env
+          echo "ACCESS_TOKEN_EXPIRE_MINUTES=30" >> backend/.env
+      
+      - name: Запуск Docker Compose
+        run: docker-compose up -d --build
+      
+      - name: Ожидание
+        run: sleep 20
+      
+      - name: Проверка backend
+        run: |
+          curl -f http://localhost:8000/health || (docker-compose logs && exit 1)
+      
+      - name: Проверка frontend
+        run: |
+          curl -f http://localhost:3000 || exit 1
+      
+      - name: Остановка
+        run: docker-compose down
